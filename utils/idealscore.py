@@ -1,15 +1,9 @@
 import torch
-import numpy as np
 from torch.nn import functional as F
 
-import torchvision
-import torchvision.transforms as transforms
-from torchvision import datasets, models, transforms
-from torch import nn, optim
+from torch import nn
 from torch.utils.data import DataLoader
-from torch.distributions import MultivariateNormal
 import math
-import random
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 

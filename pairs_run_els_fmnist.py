@@ -8,14 +8,7 @@ from utils.idealscore import (
     LocalEquivBordersScoreModule,
     ScheduledScoreMachine,
 )
-from utils.patch_search import (
-    build_patch_database,
-    image_to_patches,
-    build_kdtree,
-    kdtree_search,
-    build_faiss_index,
-    faiss_search,
-)
+
 
 OUTPUT_DIR = "els_pairs_fmnist"
 
@@ -73,7 +66,7 @@ def main():
     # 5. Подготовить train-картинки один раз для поиска ближайшего
     print("Stacking train images...")
     with torch.no_grad():
-        all_imgs = torch.stack([dataset[i][0] for i in range(len(dataset))]) 
+        all_imgs = torch.stack([dataset[i][0] for i in range(len(dataset))])
         all_flat = all_imgs.view(len(dataset), -1)
 
     #  ГЕНЕРАЦИЯ ПАР (5 на класс)
@@ -88,10 +81,12 @@ def main():
             seed = torch.randn(1, in_channels, image_size, image_size, device=device)
 
             with torch.no_grad():
-                img = machine(seed.clone(), nsteps=len(scales), label=label, device=device)
+                img = machine(
+                    seed.clone(), nsteps=len(scales), label=label, device=device
+                )
 
             img = img.detach().cpu()
-            gen = img[0]  
+            gen = img[0]
 
             # nearest neighbor
             with torch.no_grad():
@@ -102,7 +97,9 @@ def main():
 
             # денормализация
             gen_denorm = denorm(gen, meta["mean"], meta["std"]).squeeze().numpy()
-            nearest_denorm = denorm(nearest_img, meta["mean"], meta["std"]).squeeze().numpy()
+            nearest_denorm = (
+                denorm(nearest_img, meta["mean"], meta["std"]).squeeze().numpy()
+            )
 
             # Сохранение пары
             fig, ax = plt.subplots(1, 2, figsize=(6, 3))

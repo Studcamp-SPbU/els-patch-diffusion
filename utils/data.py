@@ -1,9 +1,5 @@
-import torch
-from torch.utils.data import Dataset
-import torchvision
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import torch.nn as nn
 
 def get_dataset(name, root='./data', dirname=None, train=True):
 
@@ -36,12 +32,12 @@ def get_dataset(name, root='./data', dirname=None, train=True):
 			download=True,
 			transform=transform
 		)
-	elif name == 'celeba':
-		## CELEBA SHOULD BE DOWNLOADED FROM A PUBLIC MIRROR AND RESCALED TO SIZE 32 x 32.
-		train_set = datasets.ImageFolder(
-            dirname,
-            transform=transform_train
-        )
+	# elif name == 'celeba':
+	# 	## CELEBA SHOULD BE DOWNLOADED FROM A PUBLIC MIRROR AND RESCALED TO SIZE 32 x 32.
+	# 	train_set = datasets.ImageFolder(
+    #         dirname,
+    #         transform=transform_train
+    #     )
 	return train_set, metadata
 
 def get_metadata(name):
