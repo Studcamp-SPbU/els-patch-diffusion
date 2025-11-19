@@ -66,17 +66,17 @@ def main():
     label = torch.tensor([class_id], device=device)
     print("Class id:", class_id)
 
-    #seed = torch.randn(1, in_channels, image_size, image_size, device=device)
+    seed = torch.randn(1, in_channels, image_size, image_size, device=device)
 
 
-    # грузим шум из файла:
-    noise = torch.load("seed.pt")   
-    if isinstance(noise, dict):
-        noise = noise["x"]
-    noise = noise.to(device)
-    if noise.dim() == 3:
-        noise = noise.unsqueeze(0)  
-    seed = noise  
+    # # грузим шум из файла:
+    # noise = torch.load("seed.pt")   
+    # if isinstance(noise, dict):
+    #     noise = noise["x"]
+    # noise = noise.to(device)
+    # if noise.dim() == 3:
+    #     noise = noise.unsqueeze(0)  
+    # seed = noise  
 
 
 
@@ -96,21 +96,6 @@ def main():
         nearest_img = all_imgs[min_idx]
 
     print(f"Nearest train index: {min_idx.item()}, dist: {min_dist.item():.4f}")
-
-    # gen_denorm = denorm(gen, meta["mean"], meta["std"]).squeeze().numpy()
-    # nearest_denorm = denorm(nearest_img, meta["mean"], meta["std"]).squeeze().numpy()
-
-    # fig, ax = plt.subplots(1, 2, figsize=(6, 3))
-    # ax[0].imshow(gen_denorm, cmap="gray")
-    # ax[0].set_title(f"ELS sample (class {class_id})")
-    # ax[0].axis("off")
-
-    # ax[1].imshow(nearest_denorm, cmap="gray")
-    # ax[1].set_title(f"Nearest train #{min_idx.item()}")
-    # ax[1].axis("off")
-
-    # plt.tight_layout()
-    # plt.show()
 
     gen_denorm = denorm(gen, meta["mean"], meta["std"]).cpu()
     nearest_denorm = denorm(nearest_img, meta["mean"], meta["std"]).cpu()
