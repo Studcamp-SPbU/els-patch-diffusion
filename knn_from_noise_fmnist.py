@@ -8,6 +8,26 @@ from tqdm.auto import tqdm
 from utils.data import get_dataset
 
 
+def get_next_image_path(folder: str, prefix="img_", ext=".png"):
+    """Формируем название картинки в папке."""
+    os.makedirs(folder, exist_ok=True)
+    # считываем существующие файлы
+    files = os.listdir(folder)
+    nums = []
+
+    for f in files:
+        if f.startswith(prefix) and f.endswith(ext):
+            try:
+                n = int(f[len(prefix) : -len(ext)])
+                nums.append(n)
+            except:
+                pass
+
+    next_num = (max(nums) + 1) if nums else 1
+    filename = f"{prefix}{next_num:03d}{ext}"
+    return os.path.join(folder, filename)
+
+
 def denorm(x, mean, std):
     """Обратно к [0,1] из нормализованного пространства."""
     mean_t = torch.tensor(mean).view(-1, 1, 1)
@@ -189,48 +209,85 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    # база патчей
-    kernel_size = 7
-    max_images = 10000  # можно увеличить, если памяти хватает
-    print(f"Building patch DB (k={kernel_size}, max_images={max_images})...")
-    db_patches = build_patch_database(
-        dataset,
-        kernel_size=kernel_size,
-        batch_size=64,
-        max_images=max_images,
-        device=device,
-    )
-    print("DB patches shape:", db_patches.shape)
+    # размеры патчей на каждом шаге
+    kernel_schedule = [
+        17,
+        17,
+        15,
+        15,
+        15,
+        13,
+        13,
+        13,
+        11,
+        11,
+        11,
+        9,
+        9,
+        9,
+        7,
+        7,
+        5,
+        5,
+        3,
+        3,
+    ]
 
-    # берём нормальный шум
-    noise = torch.randn(1, channels, image_size, image_size)
+    max_images = 5000
 
-    # kNN-проекция шума на manifold патчей
-    knn_img = generate_from_noise_knn(
-        noise_image=noise,
-        db_patches=db_patches,
-        image_size=image_size,
-        channels=channels,
-        kernel_size=kernel_size,
-        device=device,
-    )
+    # стартовый шум
+    x = torch.randn(1, channels, image_size, image_size)
+    x0 = x.clone()  # сохраним для сравнения
 
-    # денормализуем для отображения
-    noise_denorm = denorm(noise[0], meta["mean"], meta["std"]).cpu().squeeze().numpy()
-    knn_denorm = denorm(knn_img[0], meta["mean"], meta["std"]).cpu().squeeze().numpy()
+    # кэш баз патчей по размеру окна
+    db_cache: dict[int, torch.Tensor] = {}
 
-    # сохраняем
-    fig, ax = plt.subplots(1, 2, figsize=(6, 3))
+    for step, k in enumerate(kernel_schedule, start=1):
+        print(f"\n=== Step {step}/{len(kernel_schedule)} — kernel_size={k} ===")
+
+        if k not in db_cache:
+            print(f"Building patch DB for k={k}...")
+            db_patches = build_patch_database(
+                dataset,
+                kernel_size=k,
+                batch_size=64,
+                max_images=max_images,
+                device=device,
+            )
+            db_cache[k] = db_patches
+            print(f"DB[k={k}] patches shape:", db_patches.shape)
+        else:
+            db_patches = db_cache[k]
+            print(f"Reusing patch DB for k={k}, shape={db_patches.shape}")
+
+        # проекция текущей картинки x на manifold k×k-патчей
+        x = generate_from_noise_knn(
+            noise_image=x,
+            db_patches=db_patches,
+            image_size=image_size,
+            channels=channels,
+            kernel_size=k,
+            device=device,
+        )
+
+    # исходный шум vs результат после всех проходов
+    noise_denorm = denorm(x0[0], meta["mean"], meta["std"]).cpu().squeeze().numpy()
+    final_denorm = denorm(x[0], meta["mean"], meta["std"]).cpu().squeeze().numpy()
+
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
     ax[0].imshow(noise_denorm, cmap="gray")
     ax[0].set_title("Исходный шум")
     ax[0].axis("off")
 
-    ax[1].imshow(knn_denorm, cmap="gray")
-    ax[1].set_title("kNN-патчи из FashionMNIST")
+    ax[1].imshow(final_denorm, cmap="gray")
+    ax[1].set_title("Мульти-скейл kNN-патчи")
     ax[1].axis("off")
 
     plt.tight_layout()
-    out_path = "knn_results/knn_from_noise.png"
+
+    folder = "knn_results"
+    out_path = get_next_image_path(folder)
+
     plt.savefig(out_path, dpi=150)
     plt.close(fig)
 
