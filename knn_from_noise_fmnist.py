@@ -182,30 +182,37 @@ def build_patch_database(
 def knn_search_patches(
     query_patches: torch.Tensor,
     db_patches: torch.Tensor,
+    k: int = 3,
     device: str | torch.device = "cpu",
     q_batch: int = 32,
 ):
+    """
+    query_patches: [N_q, D]
+    db_patches:    [N_db, D]
+    k:             сколько соседей ищем
+    ->
+        indices:   [N_q, k] индексы k ближайших патчей в базе
+    """
     device = torch.device(device)
     query_patches = query_patches.to(device)
     db_patches = db_patches.to(device)
 
     N_q = query_patches.size(0)
     N_db = db_patches.size(0)
-    print(f"Searching kNN: N_q={N_q}, N_db={N_db}")
+    print(f"Searching kNN: N_q={N_q}, N_db={N_db}, k={k}")
 
     indices_list = []
 
-    pbar = tqdm(range(0, N_q, q_batch), desc="kNN search")
-
-    for start in pbar:
+    for start in tqdm(range(0, N_q, q_batch), desc="kNN search"):
         end = min(start + q_batch, N_q)
-        q = query_patches[start:end]
+        q = query_patches[start:end]  # [q_batch, D]
 
+        # L2 расстояния
         dist = torch.cdist(q, db_patches)  # [q_batch, N_db]
-        _, idx = torch.min(dist, dim=1)
-        indices_list.append(idx.cpu())
+        _, idxs = torch.topk(dist, k, dim=1, largest=False)  # [q_batch, k]
+        indices_list.append(idxs.cpu())
 
-    indices = torch.cat(indices_list, dim=0)
+    indices = torch.cat(indices_list, dim=0)  # [N_q, k]
     return indices
 
 
@@ -216,32 +223,50 @@ def generate_from_noise_knn(
     image_size: int,
     channels: int,
     kernel_size: int = 7,
+    k_neighbors: int = 3,
     device: str | torch.device = "cpu",
 ):
     """
-    noise_image: [1, C, H, W] (нормальный шум в пространстве датасета)
+    noise_image: [1, C, H, W]
+    db_patches:  [N_db, C*k*k]
+    k_neighbors: сколько соседей усредняем
+    ->
+        recon_img: [1, C, H, W]
     """
     device = torch.device(device)
     noise_image = noise_image.to(device)
     db_patches = db_patches.to(device)
 
-    # режем шумное изображение на патчи
-    q_patches, L = image_to_patches(noise_image, kernel_size=kernel_size, stride=1)
+    # режем текущую картинку на патчи
+    q_patches, L = image_to_patches(
+        noise_image,
+        kernel_size=kernel_size,
+        stride=1,
+    )  # q_patches: [N_q, C*k*k]
 
-    # для каждого патча ищем ближайший в базе
-    nn_indices = knn_search_patches(q_patches, db_patches, device=device)
-    nearest_patches = db_patches[nn_indices]  # [N_q, C*k*k]
+    # ищем k соседей для каждого патча
+    nn_indices = knn_search_patches(
+        query_patches=q_patches,
+        db_patches=db_patches,
+        k=k_neighbors,
+        device=device,
+    )  # [N_q, k]
+
+    # собираем патчи соседей: [N_q, k, D]
+    neighbors = db_patches[nn_indices.to(db_patches.device)]  # advanced indexing
+    # простое усреднение по k соседям: [N_q, D]
+    avg_patches = neighbors.mean(dim=1)
 
     # склеиваем обратно в картинку
-    recon = patches_to_image(
-        nearest_patches,
+    recon_img = patches_to_image(
+        avg_patches,
         L=L,
         image_size=image_size,
         kernel_size=kernel_size,
         stride=1,
         channels=channels,
     )
-    return recon
+    return recon_img
 
 
 def main():
@@ -311,6 +336,7 @@ def main():
             image_size=image_size,
             channels=channels,
             kernel_size=k,
+            k_neighbors=3,
             device=device,
         )
 
