@@ -111,3 +111,24 @@ els_pairs_fmnist/
 * **Статья**
   [https://arxiv.org/abs/2412.20292](https://arxiv.org/abs/2412.20292)
 
+### Новые примеры запуска
+
+# multiscale kNN на PyTorch (cdist)
+```bash
+python run_generation.py --method knn --dataset fashion_mnist
+```
+
+# multiscale kNN через FAISS
+```bash
+python run_generation.py --method faiss --dataset fashion_mnist
+```
+
+# один пример ELS + ближайший train, класс 3
+```bash
+python run_generation.py --method els --dataset fashion_mnist --class-id 3
+```
+
+# как pairs-скрипт: 5 пар на класс
+```bash
+python run_generation.py --method els --dataset fashion_mnist --pairs-per-class 5
+```
