@@ -16,9 +16,11 @@ def build_faiss_index_for_kernel(
     kernel_size: int,
     batch_size: int = 64,
     max_images: int | None = 500,
+    target_label: int | None = None,
 ) -> faiss.Index:
     """
     Стримингово строит FAISS IndexFlatL2 по патчам k*k.
+    Если target_label не None — используем только картинки с этим label.
     """
     sample_img, _ = dataset[0]
     C, H, W = sample_img.shape
@@ -29,32 +31,47 @@ def build_faiss_index_for_kernel(
     loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False)
     images_used = 0
 
-    print(f"Building FAISS index for k={kernel_size}, max_images={max_images}...")
+    if target_label is None:
+        print(f"Building FAISS index for k={kernel_size}, max_images={max_images} (all classes)...")
+    else:
+        print(
+            f"Building FAISS index for k={kernel_size}, max_images={max_images}, "
+            f"target_label={target_label}..."
+        )
 
-    for imgs, _ in loader:
-        if max_images is not None and images_used >= max_images:
-            break
+    for imgs, labels in loader:
+        if target_label is not None:
+            mask = (labels == target_label)
+            if not mask.any():
+                continue
+            imgs = imgs[mask]
 
         b = imgs.size(0)
-        if max_images is not None and images_used + b > max_images:
-            b = max_images - images_used
-            imgs = imgs[:b]
+        if b == 0:
+            continue
+
+        if max_images is not None:
+            if images_used >= max_images:
+                break
+            if images_used + b > max_images:
+                b = max_images - images_used
+                imgs = imgs[:b]
 
         unfold = nn.Unfold(
             kernel_size=kernel_size,
             stride=1,
             padding=kernel_size // 2,
         )
-        patches = unfold(imgs)  # [B, C*k*k, L]
+        patches = unfold(imgs)  
         B, CK2, L = patches.shape
-        patches = patches.permute(0, 2, 1).reshape(B * L, CK2)  # [B*L, D]
+        patches = patches.permute(0, 2, 1).reshape(B * L, CK2)  
 
         patches_np = patches.detach().contiguous().numpy().astype("float32")
         index.add(patches_np)
 
         images_used += b
 
-    print(f"  FAISS index built: ntotal={index.ntotal}, dim={dim}")
+    print(f"  FAISS index built: ntotal={index.ntotal}, dim={dim}, images_used={images_used}")
     return index
 
 
@@ -80,13 +97,13 @@ def faiss_knn_average_patches(
         end = min(start + q_batch, N_q)
         q_chunk = q[start:end]
 
-        _, I = index.search(q_chunk, k_neighbors)  # [b, k]
+        _, I = index.search(q_chunk, k_neighbors)  
 
         flat_indices = I.reshape(-1)
-        neigh = index.reconstruct_batch(flat_indices)  # [b*k, D]
-        neigh = neigh.reshape(-1, k_neighbors, D)  # [b, k, D]
+        neigh = index.reconstruct_batch(flat_indices)  
+        neigh = neigh.reshape(-1, k_neighbors, D)  
 
-        avg = neigh.mean(axis=1)  # [b, D]
+        avg = neigh.mean(axis=1) 
         all_avg.append(torch.from_numpy(avg))
 
     avg_patches = torch.cat(all_avg, dim=0).to(device)
@@ -112,14 +129,14 @@ def project_image_knn_faiss(
         x,
         kernel_size=kernel_size,
         stride=1,
-    )  # [N_q, D]
+    ) 
 
     avg_patches = faiss_knn_average_patches(
         query_patches=q_patches,
         index=index,
         k_neighbors=k_neighbors,
         device=device,
-    )  # [N_q, D]
+    ) 
 
     recon_img = patches_to_image(
         avg_patches,
@@ -141,9 +158,11 @@ def run_multiscale_knn_faiss(
     k_neighbors: int,
     seed_path: str,
     output_dir: str = "knn_results_faiss",
+    class_label: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Мульти-скейл генерация через kNN (FAISS).
+    Если class_label не None — база патчей строится по картинкам только этого класса.
     Возвращает (final_image, initial_noise).
     """
     image_size = meta["image_size"]
@@ -152,24 +171,31 @@ def run_multiscale_knn_faiss(
     x = load_seed_or_random(seed_path, channels, image_size, device)
     x0 = x.clone()
 
-    index_cache: dict[int, faiss.Index] = {}
+    index_cache: dict[tuple[int, int | None], faiss.Index] = {}
 
     for step, k in enumerate(kernel_schedule, start=1):
         print(
-            f"\n=== [FAISS kNN] Step {step}/{len(kernel_schedule)} — kernel_size={k} ==="
+            f"\n=== [FAISS kNN] Step {step}/{len(kernel_schedule)} "
+            f"— kernel_size={k}, class_label={class_label} ==="
         )
 
-        if k not in index_cache:
+        cache_key = (k, class_label)
+
+        if cache_key not in index_cache:
             index = build_faiss_index_for_kernel(
                 dataset=dataset,
                 kernel_size=k,
                 batch_size=64,
                 max_images=max_images,
+                target_label=class_label,
             )
-            index_cache[k] = index
+            index_cache[cache_key] = index
         else:
-            index = index_cache[k]
-            print(f"Reusing FAISS index for k={k}, ntotal={index.ntotal}")
+            index = index_cache[cache_key]
+            print(
+                f"Reusing FAISS index for k={k}, class_label={class_label}, "
+                f"ntotal={index.ntotal}"
+            )
 
         x = project_image_knn_faiss(
             x,

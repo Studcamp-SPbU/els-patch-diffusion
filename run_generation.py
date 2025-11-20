@@ -63,6 +63,15 @@ def parse_args():
         default=3,
         help="Для одиночной ELS-генерации: id класса",
     )
+    parser.add_argument(
+        "--class-label",
+        type=int,
+        default=None,
+        help=(
+            "Для kNN методов: если указан, база патчей "
+            "строится только по этому label (0–9)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -106,6 +115,7 @@ def main():
             k_neighbors=args.k_neighbors,
             seed_path=seed_path,
             output_dir="knn_results_faiss",
+            class_label=args.class_label,
         )
 
     elif args.method == "els":
