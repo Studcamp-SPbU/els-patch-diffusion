@@ -6,15 +6,8 @@ from utils.data import get_dataset
 from utils.noise_schedules import cosine_noise_schedule
 from utils.idealscore import (
     LocalEquivBordersScoreModule,
+    LocalEquivScoreModule,
     ScheduledScoreMachine,
-)
-from utils.patch_search import (
-    build_patch_database,
-    image_to_patches,
-    build_kdtree,
-    kdtree_search,
-    build_faiss_index,
-    faiss_search,
 )
 
 OUTPUT_DIR = "els_pairs_fmnist"
@@ -39,15 +32,16 @@ def main():
     print("Device:", device)
 
     # 2. ELS-backbone (патчи со всего датасета)
-    backbone = LocalEquivBordersScoreModule(
+    backbone = LocalEquivScoreModule(
         dataset=dataset,
         kernel_size=3,
         batch_size=64,
         image_size=image_size,
         channels=in_channels,
         schedule=cosine_noise_schedule,
-        max_samples=None,
+        max_samples=20000,
         shuffle=False,
+        topk=64,
     )
 
     # 3. scales P(t)

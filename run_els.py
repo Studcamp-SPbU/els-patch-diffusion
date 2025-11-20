@@ -5,6 +5,7 @@ from utils.data import get_dataset
 from utils.noise_schedules import cosine_noise_schedule
 from utils.idealscore import (
     LocalEquivBordersScoreModule,
+    LocalEquivScoreModule,
     ScheduledScoreMachine,
 )
 
@@ -27,18 +28,20 @@ def main():
     print("Device:", device)
 
     # 2. ELS-backbone — берём весь датасет
-    backbone = LocalEquivBordersScoreModule(
+    backbone = LocalEquivScoreModule(
         dataset=dataset,
         kernel_size=3,
         batch_size=64,
         image_size=image_size,
         channels=in_channels,
         schedule=cosine_noise_schedule,
-        max_samples=None,      
+        max_samples=20000,  # можно ограничить для ускорения
         shuffle=False,
+        topk=64,  # <-- умный soft kNN: берём только 64 лучших патча
     )
+    # если захочешь вернуться к bbELS, просто верни старую строчку
 
-    # 3. Загрузка масштабов 
+    # 3. Загрузка масштабов
     # raw_scales = torch.load("./files/scales_FashionMNIST_ResNet_zeros_conditonal.pt")
     raw_scales = torch.load("./files/scales_CIFAR10_ResNet_zeros_conditional.pt")
 
@@ -60,7 +63,7 @@ def main():
         scales=scales,
     ).to(device)
 
-    # ГЕНЕРАЦИЯ 
+    # ГЕНЕРАЦИЯ
 
     class_id = 3
     label = torch.tensor([class_id], device=device)
@@ -68,17 +71,14 @@ def main():
 
     seed = torch.randn(1, in_channels, image_size, image_size, device=device)
 
-
     # # грузим шум из файла:
-    # noise = torch.load("seed.pt")   
+    # noise = torch.load("seed.pt")
     # if isinstance(noise, dict):
     #     noise = noise["x"]
     # noise = noise.to(device)
     # if noise.dim() == 3:
-    #     noise = noise.unsqueeze(0)  
-    # seed = noise  
-
-
+    #     noise = noise.unsqueeze(0)
+    # seed = noise
 
     img = machine(seed.clone(), nsteps=len(scales), label=label, device=device)
     img = img.detach().cpu() 
