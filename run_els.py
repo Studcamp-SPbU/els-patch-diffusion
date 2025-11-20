@@ -60,21 +60,8 @@ def main():
         scales=scales,
     ).to(device)
 
-    machine.forward = tqdm(machine.forward, total=len(scales))
-
     # ГЕНЕРАЦИЯ 
     seed = torch.randn(1, in_channels, image_size, image_size, device=device)
-
-
-    _original_forward = machine.forward
-
-    def forward_with_tqdm(*args, **kwargs):
-        nsteps = args[1] if len(args) > 1 else kwargs.get("nsteps")
-        for _ in tqdm(range(nsteps)):
-            pass
-        return _original_forward(*args, **kwargs)
-
-    machine.forward = forward_with_tqdm
 
     img = machine(seed.clone(), nsteps=len(scales), label=None, device=device)
     img = img.detach().cpu()
@@ -84,7 +71,11 @@ def main():
         gen = img[0]
         gen_flat = gen.view(1, -1)
 
-        all_imgs = torch.stack([dataset[i][0] for i in range(len(dataset))])
+        all_imgs_list = []
+        for i in tqdm(range(len(dataset))):
+            all_imgs_list.append(dataset[i][0])
+
+        all_imgs = torch.stack(all_imgs_list)
         all_flat = all_imgs.view(len(dataset), -1)
 
         dists = torch.norm(all_flat - gen_flat, dim=1)
@@ -93,7 +84,7 @@ def main():
 
     print(f"Nearest train index: {min_idx.item()}, dist: {min_dist.item():.4f}")
 
-    # Виз  
+    # Визуализация  
     gen_denorm = denorm(gen, meta["mean"], meta["std"]).cpu()
     nearest_denorm = denorm(nearest_img, meta["mean"], meta["std"]).cpu()
 
