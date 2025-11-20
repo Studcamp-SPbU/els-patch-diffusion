@@ -302,7 +302,7 @@ def main():
         3,
     ]
 
-    max_images = 500
+    max_images = 10000
 
     # стартовый шум
     x = torch.randn(1, channels, image_size, image_size)

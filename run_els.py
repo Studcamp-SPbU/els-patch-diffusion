@@ -1,5 +1,6 @@
 import torch
 import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from utils.data import get_dataset
 from utils.noise_schedules import cosine_noise_schedule
@@ -16,17 +17,16 @@ def denorm(x, mean, std):
 
 
 def main():
-    # 1. Датасет FashionMNIST
-    # dataset, meta = get_dataset("fashion_mnist", root="./data")
-    dataset, meta = get_dataset("cifar10", root="./data")
+    # 1. Датасет 
+    dataset, meta = get_dataset("fashion_mnist", root="./data")
+    # dataset, meta = get_dataset("cifar10", root="./data")
     image_size = meta["image_size"]
     in_channels = meta["num_channels"]
-    num_classes = meta["num_classes"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Device:", device)
 
-    # 2. ELS-backbone — берём весь датасет
+    # 2. ELS-backbone 
     backbone = LocalEquivBordersScoreModule(
         dataset=dataset,
         kernel_size=3,
@@ -34,13 +34,13 @@ def main():
         image_size=image_size,
         channels=in_channels,
         schedule=cosine_noise_schedule,
-        max_samples=None,      
+        max_samples=None,
         shuffle=False,
     )
 
     # 3. Загрузка масштабов 
-    # raw_scales = torch.load("./files/scales_FashionMNIST_ResNet_zeros_conditonal.pt")
-    raw_scales = torch.load("./files/scales_CIFAR10_ResNet_zeros_conditional.pt")
+    raw_scales = torch.load("./files/scales_FashionMNIST_ResNet_zeros_conditonal.pt")
+    # raw_scales = torch.load("./files/scales_CIFAR10_ResNet_zeros_conditional.pt")
 
     if isinstance(raw_scales, torch.Tensor):
         scales = raw_scales.int().tolist()
@@ -49,7 +49,7 @@ def main():
     else:
         raise TypeError(f"Unexpected scales type: {type(raw_scales)}")
 
-    # 4. Машина обратной диффузии
+    # 4. Машина
     machine = ScheduledScoreMachine(
         backbone,
         in_channels=in_channels,
@@ -60,35 +60,31 @@ def main():
         scales=scales,
     ).to(device)
 
+    machine.forward = tqdm(machine.forward, total=len(scales))
+
     # ГЕНЕРАЦИЯ 
-
-    class_id = 3
-    label = torch.tensor([class_id], device=device)
-    print("Class id:", class_id)
-
     seed = torch.randn(1, in_channels, image_size, image_size, device=device)
 
 
-    # # грузим шум из файла:
-    # noise = torch.load("seed.pt")   
-    # if isinstance(noise, dict):
-    #     noise = noise["x"]
-    # noise = noise.to(device)
-    # if noise.dim() == 3:
-    #     noise = noise.unsqueeze(0)  
-    # seed = noise  
+    _original_forward = machine.forward
 
+    def forward_with_tqdm(*args, **kwargs):
+        nsteps = args[1] if len(args) > 1 else kwargs.get("nsteps")
+        for _ in tqdm(range(nsteps)):
+            pass
+        return _original_forward(*args, **kwargs)
 
+    machine.forward = forward_with_tqdm
 
-    img = machine(seed.clone(), nsteps=len(scales), label=label, device=device)
-    img = img.detach().cpu() 
+    img = machine(seed.clone(), nsteps=len(scales), label=None, device=device)
+    img = img.detach().cpu()
 
-    # 5. Ищем ближайший train-пример (для интереса)
+    # NN
     with torch.no_grad():
-        gen = img[0]                    
+        gen = img[0]
         gen_flat = gen.view(1, -1)
 
-        all_imgs = torch.stack([dataset[i][0] for i in range(len(dataset))])  
+        all_imgs = torch.stack([dataset[i][0] for i in range(len(dataset))])
         all_flat = all_imgs.view(len(dataset), -1)
 
         dists = torch.norm(all_flat - gen_flat, dim=1)
@@ -97,11 +93,12 @@ def main():
 
     print(f"Nearest train index: {min_idx.item()}, dist: {min_dist.item():.4f}")
 
+    # Виз  
     gen_denorm = denorm(gen, meta["mean"], meta["std"]).cpu()
     nearest_denorm = denorm(nearest_img, meta["mean"], meta["std"]).cpu()
 
-    if gen_denorm.dim() == 3:         
-        gen_denorm = gen_denorm.permute(1, 2, 0)  
+    if gen_denorm.dim() == 3:
+        gen_denorm = gen_denorm.permute(1, 2, 0)
     if nearest_denorm.dim() == 3:
         nearest_denorm = nearest_denorm.permute(1, 2, 0)
 
@@ -114,7 +111,7 @@ def main():
         ax[0].imshow(gen_denorm[..., 0], cmap="gray")
     else:
         ax[0].imshow(gen_denorm)
-    ax[0].set_title(f"ELS sample (class {class_id})")
+    ax[0].set_title("ELS sample (unconditional)")
     ax[0].axis("off")
 
     if nearest_denorm.shape[-1] == 1:

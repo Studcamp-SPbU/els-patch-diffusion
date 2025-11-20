@@ -1,3 +1,8 @@
+import os
+
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import argparse
 import torch
 
@@ -27,8 +32,12 @@ def parse_args():
     parser.add_argument(
         "--seed-path",
         type=str,
-        default="seed.pt",
-        help="Путь к seed для kNN методов (если нет — сгенерируется шум)",
+        default=None,
+        help=(
+            "Путь к seed для kNN методов. "
+            "Если не указан — будет использован seed_<dataset>.pt "
+            "(разный для FashionMNIST/CIFAR10)."
+        ),
     )
     parser.add_argument(
         "--max-images",
@@ -65,8 +74,15 @@ def main():
     print("Device:", device)
     print("Dataset:", meta["name"])
 
-    kernel_schedule = load_kernel_schedule("files/scales_FashionMNIST_UNet_zeros_conditonal.pt")
+    if args.seed_path is not None:
+        seed_path = args.seed_path
+    else:
+        seed_path = f"seed_{meta['name']}.pt"
+    print("Seed path:", seed_path)
 
+    kernel_schedule = load_kernel_schedule(
+        "files/scales_FashionMNIST_UNet_zeros_conditonal.pt"
+    )
 
     if args.method == "knn":
         run_multiscale_knn_torch(
@@ -76,7 +92,7 @@ def main():
             kernel_schedule=kernel_schedule,
             max_images=args.max_images,
             k_neighbors=args.k_neighbors,
-            seed_path=args.seed_path,
+            seed_path=seed_path,
             output_dir="knn_results_torch",
         )
 
@@ -88,7 +104,7 @@ def main():
             kernel_schedule=kernel_schedule,
             max_images=args.max_images,
             k_neighbors=args.k_neighbors,
-            seed_path=args.seed_path,
+            seed_path=seed_path,
             output_dir="knn_results_faiss",
         )
 
