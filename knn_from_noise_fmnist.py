@@ -28,6 +28,50 @@ def get_next_image_path(folder: str, prefix="img_", ext=".png"):
     return os.path.join(folder, filename)
 
 
+def load_seed_or_random(path: str, channels: int, image_size: int, device):
+    """
+    Если существует файл path:
+        • загружает seed
+        • приводит к форме [1, C, H, W]
+    Иначе:
+        • создаёт torch.randn(...)
+    """
+
+    if os.path.exists(path):
+        print(f"Loading seed from {path}...")
+        seed = torch.load(path, map_location=device)
+
+        # если seed упакован как dict
+        if isinstance(seed, dict):
+            if "x" in seed:
+                seed = seed["x"]
+            else:
+                # берём первое значение
+                seed = next(iter(seed.values()))
+
+        # если [C, H, W]
+        if seed.dim() == 3:
+            seed = seed.unsqueeze(0)
+
+        # если размер не совпадает — ошибка
+        if (
+            seed.shape[1] != channels
+            or seed.shape[2] != image_size
+            or seed.shape[3] != image_size
+        ):
+            raise ValueError(
+                f"Seed shape mismatch: expected [1,{channels},{image_size},{image_size}], got {tuple(seed.shape)}"
+            )
+
+        seed = seed.to(device)
+        print("Seed loaded.")
+        return seed
+
+    # если файла нет — генерируем шум
+    print(f"No seed file found at {path}. Generating random noise.")
+    return torch.randn(1, channels, image_size, image_size, device=device)
+
+
 def denorm(x, mean, std):
     """Обратно к [0,1] из нормализованного пространства."""
     mean_t = torch.tensor(mean).view(-1, 1, 1)
@@ -233,7 +277,7 @@ def main():
         3,
     ]
 
-    max_images = 5000
+    max_images = 500
 
     # стартовый шум
     x = torch.randn(1, channels, image_size, image_size)
