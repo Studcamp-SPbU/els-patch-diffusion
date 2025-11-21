@@ -18,3 +18,8 @@ els_pairs_fmnist/
 .vscode/
 
 *.cache
+
+els_single_fashion_mnist/
+knn_results/
+knn_results_faiss/
+seeds_8/

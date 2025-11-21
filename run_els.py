@@ -18,8 +18,8 @@ def denorm(x, mean, std):
 
 def main():
     # 1. Датасет FashionMNIST
-    # dataset, meta = get_dataset("fashion_mnist", root="./data")
-    dataset, meta = get_dataset("cifar10", root="./data")
+    dataset, meta = get_dataset("fashion_mnist", root="./data")
+    # dataset, meta = get_dataset("cifar10", root="./data")
     image_size = meta["image_size"]
     in_channels = meta["num_channels"]
     num_classes = meta["num_classes"]
@@ -28,22 +28,22 @@ def main():
     print("Device:", device)
 
     # 2. ELS-backbone — берём весь датасет
-    backbone = LocalEquivScoreModule(
+    backbone = LocalEquivBordersScoreModule(
         dataset=dataset,
         kernel_size=3,
         batch_size=64,
         image_size=image_size,
         channels=in_channels,
         schedule=cosine_noise_schedule,
-        max_samples=20000,  # можно ограничить для ускорения
+        max_samples=None,  # можно ограничить для ускорения
         shuffle=False,
-        topk=64,  # <-- умный soft kNN: берём только 64 лучших патча
+        topk=5,  # <-- умный soft kNN: берём только 64 лучших патча
     )
     # если захочешь вернуться к bbELS, просто верни старую строчку
 
     # 3. Загрузка масштабов
-    # raw_scales = torch.load("./files/scales_FashionMNIST_ResNet_zeros_conditonal.pt")
-    raw_scales = torch.load("./files/scales_CIFAR10_ResNet_zeros_conditional.pt")
+    raw_scales = torch.load("./files/scales_FashionMNIST_ResNet_zeros_conditonal.pt")
+    # raw_scales = torch.load("./files/scales_CIFAR10_ResNet_zeros_conditional.pt")
 
     if isinstance(raw_scales, torch.Tensor):
         scales = raw_scales.int().tolist()
@@ -69,16 +69,16 @@ def main():
     label = torch.tensor([class_id], device=device)
     print("Class id:", class_id)
 
-    seed = torch.randn(1, in_channels, image_size, image_size, device=device)
+    # seed = torch.randn(1, in_channels, image_size, image_size, device=device)
 
-    # # грузим шум из файла:
-    # noise = torch.load("seed.pt")
-    # if isinstance(noise, dict):
-    #     noise = noise["x"]
-    # noise = noise.to(device)
-    # if noise.dim() == 3:
-    #     noise = noise.unsqueeze(0)
-    # seed = noise
+    # грузим шум из файла:
+    noise = torch.load("seed_0.pt")
+    if isinstance(noise, dict):
+        noise = noise["x"]
+    noise = noise.to(device)
+    if noise.dim() == 3:
+        noise = noise.unsqueeze(0)
+    seed = noise
 
     img = machine(seed.clone(), nsteps=len(scales), label=label, device=device)
     img = img.detach().cpu() 

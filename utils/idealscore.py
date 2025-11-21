@@ -126,7 +126,7 @@ class ScheduledScoreMachine(nn.Module):
 
 class LocalEquivBordersScoreModule(nn.Module):
 
-    def __init__(self, dataset,
+	def __init__(self, dataset,
 				kernel_size=3,
 				batch_size=64,
 				image_size=32,
@@ -134,565 +134,386 @@ class LocalEquivBordersScoreModule(nn.Module):
 				schedule=cosine_noise_schedule,
 				max_samples=None,
 				shuffle=False,
+				topk=64,
 				**kwargs):
 
-        super().__init__()
+		super().__init__()
 
-        self.dataset = dataset
-        self.trainloader = DataLoader(
-            self.dataset, batch_size=batch_size, shuffle=shuffle
-        )
-        self.batch_size = batch_size
-        self.kernel_size = kernel_size
-        self.image_size = image_size
-        self.schedule = schedule
-        self.max_samples = max_samples
-        self.local_module = LocalScoreModule(
-            dataset,
-            kernel_size=kernel_size,
-            image_size=32,
-            batch_size=batch_size,
-            mode="zeros",
-            schedule=schedule,
-            max_samples=max_samples,
-        )
+		self.dataset = dataset
+		self.trainloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=shuffle)
+		self.batch_size = batch_size
+		self.kernel_size = kernel_size
+		self.image_size = image_size
+		self.schedule = schedule
+		self.max_samples = max_samples
+		self.local_module = LocalScoreModule(dataset,
+							kernel_size=kernel_size,
+							image_size=32,
+							batch_size=batch_size,
+							mode='zeros',
+							schedule=schedule,
+							max_samples=max_samples)
+		self.topk=topk
 
-    def forward(self, t, x, label=None, device=None, k=None):
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+	def forward(self, t, x, label=None, device=None, k=None):
+		if device is None:
+			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        b, c, h, w = x.shape
-        if k is None:
-            k = self.kernel_size
-        if k >= h:
-            return self.local_module(t, x, label=label, device=device, k=k)
+		b,c,h,w = x.shape
+		if k is None:
+			k = self.kernel_size
+		if k >= h:
+			return self.local_module(t, x, label=label, device=device, k=k)
 
-        bt = (self.schedule(t)) ** 0.5
-        at = (1 - self.schedule(t)) ** 0.5
+		bt = (self.schedule(t))**0.5
+		at = (1-self.schedule(t))**0.5
 
-        at = at.to(device)
-        bt = bt.to(device)
-        xpadded = F.pad(x, (k // 2, k // 2, k // 2, k // 2), value=0)
-        xpatches = F.unfold(xpadded, k, stride=1, padding=0)
-        xnorms = torch.norm(xpatches, dim=1) ** 2
-        xnorms = xnorms.reshape(b, h, w)
+		at = at.to(device)
+		bt = bt.to(device)
+		xpadded = F.pad(x,(k//2,k//2,k//2,k//2), value=0)
+		xpatches = F.unfold(xpadded, k, stride=1, padding=0) 
+		xnorms = torch.norm(xpatches, dim=1)**2
+		xnorms = xnorms.reshape(b, h, w)
 
-        numerator = torch.zeros(x.shape, device=device)
-        denominator = torch.zeros(b, h, w, device=device)
 
-        subtraction = torch.zeros(b, h, w, device=device)
+		numerator = torch.zeros(x.shape, device=device)
+		denominator = torch.zeros(b,h,w, device=device)
 
-        q = 0
-        updated = False
-        for images, labels in self.trainloader:
+		subtraction = torch.zeros(b,h,w, device=device)
 
-            if self.max_samples is not None and q > self.max_samples:
-                break
+		q = 0
+		updated = False
+		for images, labels in self.trainloader:
 
-            if label is not None:
-                images = images[(labels == label).squeeze(), :, :, :]
-            if images.shape[0] == 0:
-                q += self.batch_size
-                continue
+			if self.max_samples is not None and q > self.max_samples:
+				break
 
-            images = images.to(device)
-            labels = labels.to(device)
+			if label is not None:
+				images = images[(labels==label).squeeze(),:,:,:]
+			if images.shape[0] == 0:
+				q += self.batch_size
+				continue
 
-            bsize = images.shape[0]
 
-            # CORNERS
-            # topleft, topright, bottomleft, bottomright
+			images = images.to(device)
+			labels = labels.to(device)
 
-            dk = k + k // 2
+			bsize = images.shape[0]
 
-            padded_xcorners = [
-                F.pad(x[:, :, : k - 1, : k - 1], (k // 2, 0, k // 2, 0)),
-                F.pad(x[:, :, : k - 1, w - k + 1 :], (0, k // 2, k // 2, 0)),
-                F.pad(x[:, :, h - k + 1 :, : k - 1], (k // 2, 0, 0, k // 2)),
-                F.pad(x[:, :, h - k + 1 :, w - k + 1 :], (0, k // 2, 0, k // 2)),
-            ]
+			# CORNERS
+			# topleft, topright, bottomleft, bottomright
 
-            padded_imcorners = [
-                F.pad(images[:, :, : k - 1, : k - 1], (k // 2, 0, k // 2, 0)),
-                F.pad(images[:, :, : k - 1, -k + 1 :], (0, k // 2, k // 2, 0)),
-                F.pad(images[:, :, -k + 1 :, : k - 1], (k // 2, 0, 0, k // 2)),
-                F.pad(images[:, :, -k + 1 :, -k + 1 :], (0, k // 2, 0, k // 2)),
-            ]
+			dk = k + k//2
 
-            corner_args = []
-            corner_vals = []
-            lpatch = k - 1 - k // 2
+			padded_xcorners = [F.pad(x[:,:,:k-1,:k-1], (k//2,0,k//2,0)),
+								F.pad(x[:,:,:k-1,w-k+1:], (0,k//2,k//2,0)),
+								F.pad(x[:,:,h-k+1:,:k-1], (k//2,0,0,k//2)),
+								F.pad(x[:,:,h-k+1:,w-k+1:], (0,k//2,0,k//2))]
+			
 
-            for i in range(4):
-                xpad = padded_xcorners[i]
-                ipad = padded_imcorners[i]
+			padded_imcorners = [F.pad(images[:,:,:k-1,:k-1], (k//2,0,k//2,0)),
+					F.pad(images[:,:,:k-1,-k+1:], (0,k//2,k//2,0)),
+					F.pad(images[:,:,-k+1:,:k-1], (k//2,0,0,k//2)),
+					F.pad(images[:,:,-k+1:,-k+1:], (0,k//2,0,k//2))]
 
-                pwise_diffs = (
-                    xpad[:, None, :, :, :] - at * ipad[None, :, :, :, :]
-                )  # [b, NP, c, dk, dk]
-                pwise_normsquares = torch.sum(
-                    pwise_diffs**2, dim=2
-                )  # sum over channel dimenions [b, NP, dk, dk]
 
-                patches = F.unfold(pwise_normsquares, k, stride=1, padding=0)
-                patches = patches.view(
-                    b, bsize, k**2, lpatch, lpatch
-                )  # [b, NP, k^2, lpatch, lpatch]
-                weight_args = -torch.sum(patches, dim=2) / (2 * bt**2)  # [b, NP, h, w]
+			corner_args = []
+			corner_vals = []
+			lpatch = k-1-k//2
 
-                corner_val = pwise_diffs[
-                    :, :, :, k // 2 : k // 2 + lpatch, k // 2 : k // 2 + lpatch
-                ]
-                corner_args.append(weight_args)
-                corner_vals.append(corner_val)
+			for i in range(4):
+				xpad = padded_xcorners[i]
+				ipad = padded_imcorners[i]
 
-            # MIDDLE
-            middle_patches = F.unfold(images, k, stride=1, padding=0)
-            middle_patches = torch.permute(
-                middle_patches, (2, 0, 1)
-            )  # [h*w, 64, k^2 *c]
-            middle_patches = middle_patches.reshape(
-                middle_patches.shape[0] * middle_patches.shape[1], c, k, k
-            )  # [NP, c, k, k]
-            mpnorms = torch.sum(middle_patches**2, dim=(1, 2, 3))  # [NP]
-            mpcenters = middle_patches[:, :, k // 2, k // 2]  # [NP, c]
+				pwise_diffs = xpad[:,None,:,:,:]-at*ipad[None,:,:,:,:] # [b, NP, c, dk, dk]
+				pwise_normsquares = torch.sum(pwise_diffs**2, dim=2) # sum over channel dimenions [b, NP, dk, dk]
+				
+				patches = F.unfold(pwise_normsquares, k, stride=1, padding=0)				
+				patches = patches.view(b, bsize, k**2, lpatch, lpatch) # [b, NP, k^2, lpatch, lpatch]
+				weight_args = -torch.sum(patches, dim=2)/(2*bt**2) # [b, NP, h, w]
 
-            mpdotx = F.conv2d(x, middle_patches, padding="valid")
+				corner_val = pwise_diffs[:,:,:,k//2:k//2+lpatch,k//2:k//2+lpatch]
+				corner_args.append(weight_args)
+				corner_vals.append(corner_val)
 
-            center_exp_args = -(
-                xnorms[:, None, k // 2 : -(k // 2), k // 2 : -(k // 2)]
-                - 2 * at * mpdotx
-                + (at**2) * mpnorms[None, :, None, None]
-            ) / (
-                2 * bt**2
-            )  # [b, NP, h,w]
 
-            center_vals = (
-                x[:, None:, k // 2 : -(k // 2), k // 2 : -(k // 2)]
-                - at * mpcenters[None, :, :, None, None]
-            )
 
-            # EDGES
-            # top, right, bottom, left
-            edge_args = [
-                torch.zeros(
-                    b,
-                    bsize * (h - 2 * (k // 2)),
-                    lpatch,
-                    (h - 2 * (k // 2)),
-                    device=device,
-                )
-                for j in range(4)
-            ]
-            edge_vals = [
-                torch.zeros(
-                    b,
-                    bsize * (h - 2 * (k // 2)),
-                    c,
-                    lpatch,
-                    (h - 2 * (k // 2)),
-                    device=device,
-                )
-                for j in range(4)
-            ]
+			# MIDDLE
+			middle_patches = F.unfold(images, k, stride=1, padding=0)
+			middle_patches = torch.permute(middle_patches, (2,0,1)) # [h*w, 64, k^2 *c]
+			middle_patches = middle_patches.reshape(middle_patches.shape[0]*middle_patches.shape[1], c, k, k) # [NP, c, k, k]			
+			mpnorms = torch.sum(middle_patches**2, dim=(1,2,3)) # [NP]
+			mpcenters = middle_patches[:,:,k//2,k//2] # [NP, c]
 
-            padded_xedges = [
-                F.pad(x[:, :, : k - 1, :], (0, 0, k // 2, 0)),
-                F.pad(x[:, :, :, -k + 1 :], (0, k // 2, 0, 0)).transpose(-2, -1),
-                F.pad(x[:, :, -k + 1 :, :], (0, 0, 0, k // 2)),
-                F.pad(x[:, :, :, : k - 1], (k // 2, 0, 0, 0)).transpose(-2, -1),
-            ]
+			mpdotx = F.conv2d(x, middle_patches, padding='valid')
 
-            xedge_norms = [
-                xnorms[:, :lpatch, k // 2 : -(k // 2)],
-                xnorms[:, k // 2 : -(k // 2), -lpatch:].transpose(-2, -1),
-                xnorms[:, -lpatch:, k // 2 : -(k // 2)],
-                xnorms[:, k // 2 : -(k // 2), :lpatch].transpose(-2, -1),
-            ]
 
-            padded_iedges = [
-                F.pad(images[:, :, : k - 1, :], (0, 0, k // 2, 0)),
-                F.pad(images[:, :, :, -k + 1 :], (0, k // 2, 0, 0)).transpose(-2, -1),
-                F.pad(images[:, :, -k + 1 :, :], (0, 0, 0, k // 2)),
-                F.pad(images[:, :, :, : k - 1], (k // 2, 0, 0, 0)).transpose(-2, -1),
-            ]
+			center_exp_args = -(xnorms[:,None,k//2:-(k//2),k//2:-(k//2)] - 2*at*mpdotx + (at**2)*mpnorms[None,:,None,None])/(2*bt**2) # [b, NP, h,w]
 
-            for i in range(4):
-                xedge = padded_xedges[i]
-                iedge = padded_iedges[i]
-                for j in range(lpatch):
-                    xslice = xedge[:, :, j : k + j, :]
-                    islice = iedge[:, :, j : k + j, :]  # [NP, c, k, L]
-                    filters = torch.cat(
-                        [
-                            islice[:, :, :, a : a + k]
-                            for a in range(islice.shape[-1] - k + 1)
-                        ],
-                        axis=0,
-                    )  # [bNP, c, k, k]
-                    fnorms = torch.sum(filters**2, dim=(1, 2, 3))
+			center_vals = x[:,None:,k//2:-(k//2),k//2:-(k//2)] - at*mpcenters[None,:,:,None,None]
 
-                    epnorms = torch.sum(filters**2, dim=(1, 2, 3))  # [NP]
-                    epdotx = F.conv2d(xslice, filters, padding="valid")  # [b, NP, l]
-                    exnorms = xedge_norms[i][:, j, :]  # [b, l]
 
-                    edge_args[i][:, :, j, :] = -(
-                        exnorms[:, None, :]
-                        - 2 * at * epdotx[:, :, 0, :]
-                        + (at**2) * fnorms[None, :, None]
-                    ) / (2 * bt**2)
-                    edge_vals[i][:, :, :, j, :] = (
-                        xslice[:, None, :, k // 2, k // 2 : -(k // 2)]
-                        - at * filters[None, :, :, k // 2, k // 2, None]
-                    )
+			# EDGES
+			# top, right, bottom, left
+			edge_args = [torch.zeros(b,bsize*(h-2*(k//2)),lpatch,(h-2*(k//2)), device=device) for j in range(4)]
+			edge_vals = [torch.zeros(b,bsize*(h-2*(k//2)),c,lpatch,(h-2*(k//2)), device=device) for j in range(4)]
 
-            if not updated:
-                updated = True
-                # Center
-                subtraction[:, k // 2 : -(k // 2), k // 2 : -(k // 2)] = torch.amax(
-                    center_exp_args, dim=1
-                )
 
-                # Corners
-                subtraction[:, : k // 2, : k // 2] = torch.amax(corner_args[0], dim=1)
-                subtraction[:, : k // 2, -(k // 2) :] = torch.amax(
-                    corner_args[1], dim=1
-                )
-                subtraction[:, -(k // 2) :, : k // 2] = torch.amax(
-                    corner_args[2], dim=1
-                )
-                subtraction[:, -(k // 2) :, -(k // 2) :] = torch.amax(
-                    corner_args[3], dim=1
-                )
+			padded_xedges = [F.pad(x[:,:,:k-1,:], (0,0,k//2,0)),
+							F.pad(x[:,:,:,-k+1:],(0,k//2,0,0)).transpose(-2,-1),
+							F.pad(x[:,:,-k+1:,:],(0,0,0,k//2)),
+							F.pad(x[:,:,:,:k-1],(k//2,0,0,0)).transpose(-2,-1)]
+			
 
-                # Edges
-                subtraction[:, : k // 2, k // 2 : -(k // 2)] = torch.amax(
-                    edge_args[0], dim=1
-                )
-                subtraction[:, k // 2 : -(k // 2), -(k // 2) :] = torch.amax(
-                    edge_args[1].transpose(-2, -1), dim=1
-                )
-                subtraction[:, -(k // 2) :, k // 2 : -(k // 2)] = torch.amax(
-                    edge_args[2], dim=1
-                )
-                subtraction[:, k // 2 : -(k // 2), : k // 2] = torch.amax(
-                    edge_args[3].transpose(-2, -1), dim=1
-                )
+			xedge_norms = [xnorms[:,:lpatch,k//2:-(k//2)], xnorms[:,k//2:-(k//2),-lpatch:].transpose(-2,-1), xnorms[:,-lpatch:,k//2:-(k//2)], xnorms[:,k//2:-(k//2),:lpatch].transpose(-2,-1)]
+			
+			padded_iedges = [F.pad(images[:,:,:k-1,:], (0,0,k//2,0)),
+							F.pad(images[:,:,:,-k+1:],(0,k//2,0,0)).transpose(-2,-1),
+							F.pad(images[:,:,-k+1:,:],(0,0,0,k//2)),
+							F.pad(images[:,:,:,:k-1],(k//2,0,0,0)).transpose(-2,-1)]
 
-            else:
+			for i in range(4):
+				xedge = padded_xedges[i]
+				iedge = padded_iedges[i]
+				for j in range(lpatch):
+					xslice = xedge[:,:,j:k+j,:]
+					islice = iedge[:,:,j:k+j,:] # [NP, c, k, L]
+					filters = torch.cat([islice[:,:,:,a:a+k] for a in range(islice.shape[-1]-k+1)], axis=0) # [bNP, c, k, k]
+					fnorms = torch.sum(filters**2, dim=(1,2,3))
 
-                new_subtraction = torch.zeros(subtraction.shape, device=device)
 
-                # Center
-                new_subtraction[:, k // 2 : -(k // 2), k // 2 : -(k // 2)] = torch.amax(
-                    center_exp_args, dim=1
-                )
+					epnorms = torch.sum(filters**2, dim=(1,2,3)) # [NP]
+					epdotx = F.conv2d(xslice, filters, padding='valid') # [b, NP, l]
+					exnorms = xedge_norms[i][:,j,:] # [b, l]
 
-                # Corners
-                new_subtraction[:, : k // 2, : k // 2] = torch.amax(
-                    corner_args[0], dim=1
-                )
-                new_subtraction[:, : k // 2, -(k // 2) :] = torch.amax(
-                    corner_args[1], dim=1
-                )
-                new_subtraction[:, -(k // 2) :, : k // 2] = torch.amax(
-                    corner_args[2], dim=1
-                )
-                new_subtraction[:, -(k // 2) :, -(k // 2) :] = torch.amax(
-                    corner_args[3], dim=1
-                )
+					edge_args[i][:,:,j,:] = -(exnorms[:,None,:] - 2*at*epdotx[:,:,0,:] + (at**2)*fnorms[None,:,None])/(2*bt**2)  
+					edge_vals[i][:,:,:,j,:] = (xslice[:,None,:,k//2,k//2:-(k//2)]-at*filters[None,:,:,k//2,k//2,None])
 
-                # Edges
-                new_subtraction[:, : k // 2, k // 2 : -(k // 2)] = torch.amax(
-                    edge_args[0], dim=1
-                )
-                new_subtraction[:, k // 2 : -(k // 2), -(k // 2) :] = torch.amax(
-                    edge_args[1].transpose(-2, -1), dim=1
-                )
-                new_subtraction[:, -(k // 2) :, k // 2 : -(k // 2)] = torch.amax(
-                    edge_args[2], dim=1
-                )
-                new_subtraction[:, k // 2 : -(k // 2), : k // 2] = torch.amax(
-                    edge_args[3].transpose(-2, -1), dim=1
-                )
 
-                delta_subtraction = (
-                    new_subtraction > subtraction
-                ) * new_subtraction + (subtraction >= new_subtraction) * subtraction
-                numerator /= torch.exp(delta_subtraction - subtraction)[:, None, :, :]
-                denominator /= torch.exp(delta_subtraction - subtraction)[:, :, :]
-                subtraction = delta_subtraction
+			if not updated:
+				updated = True
+				# Center
+				subtraction[:,k//2:-(k//2),k//2:-(k//2)] = torch.amax(center_exp_args, dim=1)
 
-            # Center
-            center_exp_vals = torch.exp(
-                center_exp_args
-                - subtraction[:, None, k // 2 : -(k // 2), k // 2 : -(k // 2)]
-            )
-            numerator[:, :, k // 2 : -(k // 2), k // 2 : -(k // 2)] += torch.sum(
-                center_exp_vals[:, :, None, :, :] * center_vals, dim=1
-            )
-            denominator[:, k // 2 : -(k // 2), k // 2 : -(k // 2)] += torch.sum(
-                center_exp_vals, dim=1
-            )
+				# Corners
+				subtraction[:,:k//2,:k//2] = torch.amax(corner_args[0], dim=1)
+				subtraction[:,:k//2,-(k//2):] = torch.amax(corner_args[1], dim=1)
+				subtraction[:,-(k//2):,:k//2] = torch.amax(corner_args[2], dim=1)
+				subtraction[:,-(k//2):,-(k//2):] = torch.amax(corner_args[3], dim=1)
 
-            # Corners
-            corner_subtractions = [
-                subtraction[:, : k // 2, : k // 2],
-                subtraction[:, : k // 2, -(k // 2) :],
-                subtraction[:, -(k // 2) :, : k // 2],
-                subtraction[:, -(k // 2) :, -(k // 2) :],
-            ]
-            corner_exp_vals = [
-                torch.exp(corner_args[i] - corner_subtractions[i][:, None, :, :])
-                for i in range(4)
-            ]
+				# Edges
+				subtraction[:,:k//2,k//2:-(k//2)] = torch.amax(edge_args[0], dim=1)
+				subtraction[:,k//2:-(k//2),-(k//2):] = torch.amax(edge_args[1].transpose(-2,-1), dim=1)
+				subtraction[:,-(k//2):,k//2:-(k//2)] = torch.amax(edge_args[2], dim=1)
+				subtraction[:,k//2:-(k//2),:k//2] = torch.amax(edge_args[3].transpose(-2,-1), dim=1)
 
-            numerator[:, :, : k // 2, : k // 2] += torch.sum(
-                corner_exp_vals[0][:, :, None, :, :] * corner_vals[0], dim=1
-            )
-            numerator[:, :, : k // 2, -(k // 2) :] += torch.sum(
-                corner_exp_vals[1][:, :, None, :, :] * corner_vals[1], dim=1
-            )
-            numerator[:, :, -(k // 2) :, : k // 2] += torch.sum(
-                corner_exp_vals[2][:, :, None, :, :] * corner_vals[2], dim=1
-            )
-            numerator[:, :, -(k // 2) :, -(k // 2) :] += torch.sum(
-                corner_exp_vals[3][:, :, None, :, :] * corner_vals[3], dim=1
-            )
+			else:
 
-            denominator[:, : k // 2, : k // 2] += torch.sum(corner_exp_vals[0], dim=1)
-            denominator[:, : k // 2, -(k // 2) :] += torch.sum(
-                corner_exp_vals[1], dim=1
-            )
-            denominator[:, -(k // 2) :, : k // 2] += torch.sum(
-                corner_exp_vals[2], dim=1
-            )
-            denominator[:, -(k // 2) :, -(k // 2) :] += torch.sum(
-                corner_exp_vals[3], dim=1
-            )
+				new_subtraction = torch.zeros(subtraction.shape, device=device)
 
-            # Edges
-            edge_subtractions = [
-                subtraction[:, : k // 2, k // 2 : -(k // 2)],
-                subtraction[:, k // 2 : -(k // 2), -(k // 2) :],
-                subtraction[:, -(k // 2) :, k // 2 : -(k // 2)],
-                subtraction[:, k // 2 : -(k // 2), : k // 2],
-            ]
-            edge_args = [
-                edge_args[0],
-                edge_args[1].transpose(-2, -1),
-                edge_args[2],
-                edge_args[3].transpose(-2, -1),
-            ]
-            edge_vals = [
-                edge_vals[0],
-                edge_vals[1].transpose(-2, -1),
-                edge_vals[2],
-                edge_vals[3].transpose(-2, -1),
-            ]
+				# Center
+				new_subtraction[:,k//2:-(k//2),k//2:-(k//2)] = torch.amax(center_exp_args, dim=1)
 
-            edge_exp_vals = [
-                torch.exp(edge_args[i] - edge_subtractions[i][:, None, :, :])
-                for i in range(4)
-            ]
+				# Corners
+				new_subtraction[:,:k//2,:k//2] = torch.amax(corner_args[0], dim=1)
+				new_subtraction[:,:k//2,-(k//2):] = torch.amax(corner_args[1], dim=1)
+				new_subtraction[:,-(k//2):,:k//2] = torch.amax(corner_args[2], dim=1)
+				new_subtraction[:,-(k//2):,-(k//2):] = torch.amax(corner_args[3], dim=1)
 
-            numerator[:, :, : k // 2, k // 2 : -(k // 2)] += torch.sum(
-                edge_exp_vals[0][:, :, None, :, :] * edge_vals[0], dim=1
-            )
-            numerator[:, :, k // 2 : -(k // 2), -(k // 2) :] += torch.sum(
-                edge_exp_vals[1][:, :, None, :, :] * edge_vals[1], dim=1
-            )
-            numerator[:, :, -(k // 2) :, k // 2 : -(k // 2)] += torch.sum(
-                edge_exp_vals[2][:, :, None, :, :] * edge_vals[2], dim=1
-            )
-            numerator[:, :, k // 2 : -(k // 2), : k // 2] += torch.sum(
-                edge_exp_vals[3][:, :, None, :, :] * edge_vals[3], dim=1
-            )
+				# Edges
+				new_subtraction[:,:k//2,k//2:-(k//2)] = torch.amax(edge_args[0], dim=1)
+				new_subtraction[:,k//2:-(k//2),-(k//2):] = torch.amax(edge_args[1].transpose(-2,-1), dim=1)
+				new_subtraction[:,-(k//2):,k//2:-(k//2)] = torch.amax(edge_args[2], dim=1)
+				new_subtraction[:,k//2:-(k//2),:k//2] = torch.amax(edge_args[3].transpose(-2,-1), dim=1)
 
-            denominator[:, : k // 2, k // 2 : -(k // 2)] += torch.sum(
-                edge_exp_vals[0], dim=1
-            )
-            denominator[:, k // 2 : -(k // 2), -(k // 2) :] += torch.sum(
-                edge_exp_vals[1], dim=1
-            )
-            denominator[:, -(k // 2) :, k // 2 : -(k // 2)] += torch.sum(
-                edge_exp_vals[2], dim=1
-            )
-            denominator[:, k // 2 : -(k // 2), : k // 2] += torch.sum(
-                edge_exp_vals[3], dim=1
-            )
 
-            q += self.batch_size
+				delta_subtraction = (new_subtraction>subtraction)*new_subtraction+(subtraction>=new_subtraction)*subtraction
+				numerator /= torch.exp(delta_subtraction-subtraction)[:,None,:,:]
+				denominator /= torch.exp(delta_subtraction-subtraction)[:,:,:]
+				subtraction = delta_subtraction
 
-        return -numerator / denominator[:, None, :, :] / bt**2
+
+			# ======== SMART TOP-K FOR CENTER ========
+			b_, NP, h0, w0 = center_exp_args.shape
+			K = 64   # твой top-k
+
+			# локальные стабилизированные значения (normal ELS logic)
+			sub_center = subtraction[:, None, k//2:-(k//2), k//2:-(k//2)]   # [b,1,h0,w0]
+			local_exp = center_exp_args - sub_center                        # [b,NP,h0,w0]
+
+			if K is not None and NP > K:
+				# flatten spatial
+				local_exp_flat = local_exp.reshape(b_, NP, h0*w0)           # [b,NP,hw]
+
+				# top-k по патчам
+				top_vals, top_idx = torch.topk(local_exp_flat, K, dim=1)    # [b,K,hw]
+
+				# exp только по top-k (важно: вычитаем subtraction!)
+				top_exp = torch.exp(top_vals)                                # [b,K,hw]
+
+				# center_vals: [b,NP,c,h0,w0] → в flat
+				cv_flat = center_vals.reshape(b_, NP, c, h0*w0)             # [b,NP,c,hw]
+
+				# выбираем нужные c-канальные значения
+				gather_idx = top_idx.unsqueeze(2).expand(-1, -1, c, -1)     # [b,K,c,hw]
+				cv_top = torch.gather(cv_flat, 1, gather_idx)               # [b,K,c,hw]
+
+				# накопление: weighted sum
+				weighted = (top_exp.unsqueeze(2) * cv_top).sum(dim=1)       # [b,c,hw]
+				denom = top_exp.sum(dim=1)                                  # [b,hw]
+
+				# reshape обратно
+				weighted = weighted.view(b_, c, h0, w0)
+				denom = denom.view(b_, h0, w0)
+
+				numerator[:,:,k//2:-(k//2),k//2:-(k//2)] += weighted
+				denominator[:,k//2:-(k//2),k//2:-(k//2)] += denom
+
+			else:
+				# ОРИГИНАЛЬНАЯ ВЕТКА (без top-k)
+				center_exp_vals = torch.exp(local_exp)
+				numerator[:,:,k//2:-(k//2),k//2:-(k//2)] += torch.sum(
+					center_exp_vals[:,:,None,:,:] * center_vals, dim=1
+				)
+				denominator[:,k//2:-(k//2),k//2:-(k//2)] += torch.sum(center_exp_vals, dim=1)
+
+			# Corners
+			corner_subtractions = [subtraction[:,:k//2,:k//2], subtraction[:,:k//2,-(k//2):], subtraction[:,-(k//2):,:k//2], subtraction[:,-(k//2):,-(k//2):]]
+			corner_exp_vals = [torch.exp(corner_args[i]-corner_subtractions[i][:,None,:,:]) for i in range(4)]
+
+			numerator[:,:,:k//2,:k//2] += torch.sum(corner_exp_vals[0][:,:,None,:,:]*corner_vals[0], dim=1)
+			numerator[:,:,:k//2,-(k//2):] += torch.sum(corner_exp_vals[1][:,:,None,:,:]*corner_vals[1], dim=1)
+			numerator[:,:,-(k//2):,:k//2] += torch.sum(corner_exp_vals[2][:,:,None,:,:]*corner_vals[2], dim=1)
+			numerator[:,:,-(k//2):,-(k//2):] += torch.sum(corner_exp_vals[3][:,:,None,:,:]*corner_vals[3], dim=1)
+
+			denominator[:,:k//2,:k//2] += torch.sum(corner_exp_vals[0], dim=1)
+			denominator[:,:k//2,-(k//2):] += torch.sum(corner_exp_vals[1], dim=1)
+			denominator[:,-(k//2):,:k//2] += torch.sum(corner_exp_vals[2], dim=1)
+			denominator[:,-(k//2):,-(k//2):] += torch.sum(corner_exp_vals[3], dim=1)
+
+			# Edges
+			edge_subtractions = [subtraction[:,:k//2,k//2:-(k//2)], subtraction[:,k//2:-(k//2),-(k//2):], subtraction[:,-(k//2):,k//2:-(k//2)], subtraction[:,k//2:-(k//2),:k//2]]
+			edge_args = [edge_args[0], edge_args[1].transpose(-2,-1), edge_args[2], edge_args[3].transpose(-2,-1)]
+			edge_vals = [edge_vals[0], edge_vals[1].transpose(-2,-1), edge_vals[2], edge_vals[3].transpose(-2,-1)]
+
+			edge_exp_vals = [torch.exp(edge_args[i]-edge_subtractions[i][:,None,:,:]) for i in range(4)]
+
+			numerator[:,:,:k//2,k//2:-(k//2)] += torch.sum(edge_exp_vals[0][:,:,None,:,:]*edge_vals[0], dim=1)
+			numerator[:,:,k//2:-(k//2),-(k//2):] += torch.sum(edge_exp_vals[1][:,:,None,:,:]*edge_vals[1], dim=1)
+			numerator[:,:,-(k//2):,k//2:-(k//2)] += torch.sum(edge_exp_vals[2][:,:,None,:,:]*edge_vals[2], dim=1)
+			numerator[:,:,k//2:-(k//2),:k//2] += torch.sum(edge_exp_vals[3][:,:,None,:,:]*edge_vals[3], dim=1)
+
+			denominator[:,:k//2,k//2:-(k//2)] += torch.sum(edge_exp_vals[0], dim=1)
+			denominator[:,k//2:-(k//2),-(k//2):] += torch.sum(edge_exp_vals[1], dim=1)
+			denominator[:,-(k//2):,k//2:-(k//2)] += torch.sum(edge_exp_vals[2], dim=1)
+			denominator[:,k//2:-(k//2),:k//2] += torch.sum(edge_exp_vals[3], dim=1)
+
+			q += self.batch_size
+
+		return -numerator/denominator[:,None,:,:]/bt**2
 
 
 class LocalEquivScoreModule(nn.Module):
 
-    def __init__(
-        self,
-        dataset,
-        kernel_size=3,
-        batch_size=64,
-        image_size=32,
-        channels=3,
-        schedule=cosine_noise_schedule,
-        max_samples=None,
-        shuffle=False,
-        topk=None,  # <-- новый аргумент
-        **kwargs
-    ):
+	def __init__(self, dataset,
+				kernel_size=3,
+				batch_size=64,
+				image_size=32,
+				channels=3,
+				schedule=cosine_noise_schedule,
+				max_samples=None,
+				shuffle=False,
+				topk=64,
+				**kwargs):
 
-        super().__init__()
+		super().__init__()
 
-        self.dataset = dataset
-        self.trainloader = DataLoader(
-            self.dataset, batch_size=batch_size, shuffle=shuffle
-        )
-        self.batch_size = batch_size
-        self.kernel_size = kernel_size
-        self.image_size = image_size
-        self.schedule = schedule
-        self.max_samples = max_samples
-        self.channels = channels
-        self.topk = topk  # <-- сохраняем
+		self.dataset = dataset
+		self.trainloader = DataLoader(self.dataset, batch_size=batch_size, shuffle=shuffle)
+		self.batch_size = batch_size
+		self.kernel_size = kernel_size
+		self.image_size = image_size
+		self.schedule = schedule
+		self.max_samples = max_samples
+		
 
-    def forward(self, t, x, label=None, device=None, k=None):
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+	def forward(self, t, x, label=None, device=None, k=None):
+		if device is None:
+			device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-        x = x.to(device)
 
-        b, c, h, w = x.shape
-        if k is None:
-            k = self.kernel_size
+		b,c,h,w = x.shape
+		if k is None:
+			k = self.kernel_size
 
-        bt = (self.schedule(t)) ** 0.5
-        at = (1 - self.schedule(t)) ** 0.5
+		bt = (self.schedule(t))**0.5
+		at = (1-self.schedule(t))**0.5
 
-        bt = bt.to(device)
-        at = at.to(device)
+		bt = bt.to(device)
+		at = at.to(device)
 
-        d = k // 2
+		d = k//2
 
-        xpadded = F.pad(x, (d, d, d, d), mode="circular")
+		xpadded = F.pad(x, (d, d, d, d), mode='circular')
 
-        xpatches = F.unfold(xpadded, k, stride=1, padding=0)
-        xnorms = torch.norm(xpatches, dim=1) ** 2
-        xnorms = xnorms.reshape(b, h, w)  # [b, h, w]
+		xpatches = F.unfold(xpadded, k, stride=1, padding=0) 
+		xnorms = torch.norm(xpatches, dim=1)**2
+		xnorms = xnorms.reshape(b, h, w) # [b, h, w] lol
 
-        numerator = torch.zeros(x.shape, device=device)
-        denominator = torch.zeros(b, h, w, device=device)
+		numerator = torch.zeros(x.shape, device=device)
+		denominator = torch.zeros(b,h,w, device=device)
 
-        subtraction = None
+		subtraction = None
 
-        i = 0
+		i = 0
+		samps = 0
+		max_exp_args = None
+		next_exp_args = None
 
-        for images, labels in self.trainloader:
+		for images, labels in self.trainloader:
 
-            i += images.shape[0]
-            if self.max_samples is not None and i > self.max_samples:
-                break
+			i += images.shape[0]
+			if self.max_samples is not None and i > self.max_samples:
+				break
 
-            if label is not None:
-                images = images[(labels == label).squeeze(), :, :, :]
-            if images.shape[0] == 0:
-                continue
+			if label is not None:
+				images = images[(labels==label).squeeze(),:,:,:]
+			if images.shape[0] == 0:
+				continue
 
-            images = images.to(device)
-            labels = labels.to(device)
+			images = images.to(device)
+			labels = labels.to(device)
 
-            bsize = images.shape[0]
+			samps += images.shape[0]
 
-            # банк патчей из этого батча
-            patches = F.unfold(images, k, stride=1, padding=0)
-            patches = torch.permute(patches, (2, 0, 1))  # [h*w, bsize, k^2*c]
-            patches = patches.reshape(
-                patches.shape[0] * patches.shape[1], c, k, k
-            )  # [NP, c, k, k]
-            pnorms = torch.sum(patches**2, dim=(1, 2, 3))  # [NP]
-            pcenters = patches[:, :, k // 2, k // 2]  # [NP, c]
+			bsize = images.shape[0]
+			patches = F.unfold(images, k, stride=1, padding=0)
 
-            # скалярные произведения x с патчами (циклическая свёртка)
-            pdotx = circular_convolution_native(x, patches)  # [b, NP, h, w]
+			patches = torch.permute(patches, (2,0,1)) # [h*w, 64, k^2 *c]
+			patches = patches.reshape(patches.shape[0]*patches.shape[1], c, k, k) # [NP, c, k, k]			
+			pnorms = torch.sum(patches**2, dim=(1,2,3)) # [NP]
+			pcenters = patches[:,:,k//2,k//2] # [NP, c]
+			
+			pdotx = circular_convolution_native(x, patches)
 
-            exp_args = -(
-                xnorms[:, None, :, :]
-                - 2 * at * pdotx
-                + (at**2) * pnorms[None, :, None, None]
-            ) / (
-                2 * bt**2
-            )  # [b, NP, h, w]
+			exp_args = -(xnorms[:,None,:,:] - 2*at*pdotx + (at**2)*pnorms[None,:,None,None])/(2*bt**2) # [b, NP, h,w]
 
-            # log-sum-exp стабилизация по ВСЕМ патчам (как раньше)
-            if subtraction is None:
-                subtraction = torch.amax(
-                    exp_args, dim=(0, 1), keepdim=True
-                )  # [1,1,h,w]
-            else:
-                new_subtraction = torch.amax(exp_args, dim=(0, 1), keepdim=True)
-                delta_subtraction = torch.where(
-                    new_subtraction > subtraction, new_subtraction, subtraction
-                )
-                # коррекция накопленных сумм
-                numerator /= torch.exp(delta_subtraction - subtraction)
-                denominator /= torch.exp(delta_subtraction - subtraction)[:, 0, :, :]
-                subtraction = delta_subtraction
+			if subtraction is None:
+				subtraction = torch.amax(exp_args, dim=(0,1), keepdim=True)
+			else:
+				new_subtraction = torch.amax(exp_args, dim=(0,1), keepdim=True)
+				delta_subtraction = (new_subtraction>subtraction)*new_subtraction+(subtraction>=new_subtraction)*subtraction
+				numerator /= torch.exp(delta_subtraction-subtraction)
+				denominator /= torch.exp(delta_subtraction-subtraction)[:,0,:,:]
+				subtraction = delta_subtraction
 
-            # === УМНЫЙ soft kNN: обрезаем хвост по top-k соседям ===
-            if self.topk is not None and self.topk < exp_args.shape[1]:
-                K = self.topk
-                b_, NP, h_, w_ = exp_args.shape
-                hw = h_ * w_
+			exp_vals = torch.exp(exp_args - subtraction) #[b, NP, h, w]
+			num_vals = (x[:,None,:,:,:] - at*pcenters[None,:,:,None,None]) #[b,NP,c,h,w]
 
-                # выпрямляем по пространству
-                exp_args_flat = exp_args.view(b_, NP, hw)  # [b, NP, hw]
-                sub_flat = subtraction.view(1, 1, hw)  # [1,1,hw]
+			numerator += torch.mean(exp_vals[:,:,None,:,:]*num_vals, dim=1)
+			denominator += torch.mean(exp_vals, dim=1)
 
-                # top-k по патчам
-                top_vals, top_idx = torch.topk(exp_args_flat, K, dim=1)  # [b, K, hw]
-                exp_vals_flat = torch.exp(top_vals - sub_flat)  # [b, K, hw]
-
-                # x в формате [b, K, hw, c]
-                x_flat = x.view(b_, c, hw)  # [b, c, hw]
-                x_exp = x_flat.permute(0, 2, 1).unsqueeze(1)  # [b,1,hw,c]
-                x_exp = x_exp.expand(-1, K, -1, -1)  # [b,K,hw,c]
-
-                # pcenters в формате [b, K, hw, c]
-                # pcenters: [NP, c]
-                pcenters_exp = pcenters.view(1, NP, 1, c)  # [1,NP,1,c]
-                pcenters_exp = pcenters_exp.expand(b_, -1, hw, -1)  # [b,NP,hw,c]
-
-                idx_exp = top_idx.unsqueeze(-1).expand(-1, -1, -1, c)  # [b,K,hw,c]
-                top_pcenters = torch.gather(pcenters_exp, 1, idx_exp)  # [b,K,hw,c]
-
-                at_b = at.view(b_, 1, 1, 1)  # [b,1,1,1]
-                num_vals_flat = x_exp - at_b * top_pcenters  # [b,K,hw,c]
-
-                # вклад в числитель и знаменатель
-                exp_vals_flat_exp = exp_vals_flat.unsqueeze(-1)  # [b,K,hw,1]
-                num_contrib_flat = (exp_vals_flat_exp * num_vals_flat).mean(
-                    dim=1
-                )  # [b,hw,c]
-                den_contrib_flat = exp_vals_flat.mean(dim=1)  # [b,hw]
-
-                num_contrib = num_contrib_flat.permute(0, 2, 1).view(b_, c, h_, w_)
-                den_contrib = den_contrib_flat.view(b_, h_, w_)
-
-                numerator += num_contrib
-                denominator += den_contrib
-
-            else:
-                # старое поведение: softmax по ВСЕМ патчам
-                exp_vals = torch.exp(exp_args - subtraction)  # [b, NP, h, w]
-                num_vals = (
-                    x[:, None, :, :, :] - at * pcenters[None, :, :, None, None]
-                )  # [b,NP,c,h,w]
-
-                numerator += torch.mean(exp_vals[:, :, None, :, :] * num_vals, dim=1)
-                denominator += torch.mean(exp_vals, dim=1)
-
-        return -numerator / denominator[:, None, :, :] / bt**2
+		return -numerator/denominator[:,None,:,:]/bt**2
 
 
 class LocalScoreModule(nn.Module):
